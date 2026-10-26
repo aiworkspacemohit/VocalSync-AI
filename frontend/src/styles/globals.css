@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#fafafa] text-zinc-900 font-sans antialiased selection:bg-zinc-900 selection:text-white;
+  }
+}
+
+/* Kuro Minimalist Crisp Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f4f4f5;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
+}
+
+/* Kuro Utility Cards & Accents with Dark Visible Borders */
+.kuro-card {
+  background: #ffffff;
+  border: 1px solid #27272a;
+  border-radius: 0.75rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.kuro-card-subtle {
+  background: #fafafa;
+  border: 1px solid #3f3f46;
+  border-radius: 0.75rem;
+}
+
+.kuro-divider-dashed {
+  border-bottom: 1px dashed #52525b;
+}
+
+/* Kuro Nav Active Block */
+.kuro-nav-active {
+  background: #000000;
+  color: #ffffff;
+}
+
+/* Animations */
+@keyframes kuro-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-kuro-pulse {
+  animation: kuro-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}

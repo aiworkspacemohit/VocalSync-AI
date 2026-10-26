@@ -1,0 +1,45 @@
+
+# Secrets and environment variables
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Frontend
+node_modules/
+dist/
+
+# Biometric voiceprints and private recordings
+backend/voice_profiles/*.pt
+*.wav
+*.mp3
+*.webm
+*.pcm
+
+# Local databases and generated files
+*.db
+*.sqlite3
+chroma-db/
+uploads/
+recordings/
+
+# Machine learning model caches
+.cache/
+models/
+
+# Editor and operating system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+
+# Private biometric voice profiles
+backend/voice_profiles/

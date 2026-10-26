@@ -1,0 +1,1 @@
+# VocalSync AI Backend Root

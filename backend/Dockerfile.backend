@@ -1,0 +1,31 @@
+FROM python:3.11-slim
+
+# System dependencies for audio decoding & PyAV
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ffmpeg \
+    libsndfile1 \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy dependency specifications
+COPY requirements.txt .
+
+# Install dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy backend source code & initial voice profiles
+COPY . .
+
+# Environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PORT=8000 \
+    HOST=0.0.0.0
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
