@@ -65,14 +65,22 @@ export default function EnrollmentModal({
     if (!window.confirm(`Are you sure you want to remove the biometric profile for "${name}"?`)) return;
     setDeletingName(name);
     try {
-      const res = await fetch(`${apiBaseUrl}/api/speakers/${encodeURIComponent(name)}`, {
+      let res = await fetch(`${apiBaseUrl}/api/speakers/${encodeURIComponent(name)}`, {
         method: 'DELETE'
       });
+      if (!res.ok) {
+        res = await fetch(`${apiBaseUrl}/api/speakers/delete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+      }
+
       if (res.ok) {
         await fetchExistingSpeakers();
         if (onEnrollmentSuccess) onEnrollmentSuccess();
       } else {
-        alert('Failed to delete profile.');
+        alert('Failed to delete profile. Please restart your backend server to load the new route.');
       }
     } catch (err) {
       console.error(err);

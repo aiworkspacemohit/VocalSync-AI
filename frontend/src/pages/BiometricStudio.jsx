@@ -94,14 +94,23 @@ export default function BiometricStudio({ onNavigateToMeet }) {
 
     setDeletingName(name);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/speakers/${encodeURIComponent(name)}`, {
+      let res = await fetch(`${API_BASE_URL}/api/speakers/${encodeURIComponent(name)}`, {
         method: 'DELETE'
       });
+      if (!res.ok) {
+        // Fallback to POST /api/speakers/delete
+        res = await fetch(`${API_BASE_URL}/api/speakers/delete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+      }
+
       if (res.ok) {
         fetchSystemInfo();
       } else {
         const err = await res.json().catch(() => ({}));
-        alert(`Failed to delete profile: ${err.detail || 'Unknown error'}`);
+        alert(`Failed to delete profile: ${err.detail || 'Endpoint not found. Please restart your backend server to load the new route.'}`);
       }
     } catch (err) {
       console.error('Delete speaker error:', err);

@@ -124,9 +124,40 @@ def delete_speaker(speaker_name: str):
     }
 
 
+@app.post("/api/speakers/delete")
+def delete_speaker_post(request_data: Optional[dict] = None):
+    """Universal POST fallback for removing voice profiles."""
+    data = request_data or {}
+    speaker_name = data.get("speaker_name") or data.get("name") or ""
+    clean_name = speaker_name.removesuffix(".npy").strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Missing 'name' in request body.")
+    success = biometrics_engine.delete_speaker(clean_name)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Voice profile '{clean_name}' not found.")
+    return {
+        "status": "success",
+        "message": f"Successfully deleted voice profile for '{clean_name}'",
+        "count": len(biometrics_engine.enrolled_profiles),
+        "speakers": biometrics_engine.list_enrolled_speakers()
+    }
+
+
 @app.delete("/api/speakers")
-def clear_all_speakers():
-    """Clears all enrolled speaker profiles."""
+def clear_all_speakers(name: Optional[str] = Query(None)):
+    """Clears all enrolled speaker profiles, or a specific profile if 'name' query parameter is passed."""
+    if name:
+        clean_name = name.removesuffix(".npy").strip()
+        success = biometrics_engine.delete_speaker(clean_name)
+        if not success:
+            raise HTTPException(status_code=404, detail=f"Voice profile '{clean_name}' not found.")
+        return {
+            "status": "success",
+            "message": f"Successfully deleted voice profile for '{clean_name}'",
+            "count": len(biometrics_engine.enrolled_profiles),
+            "speakers": biometrics_engine.list_enrolled_speakers()
+        }
+
     removed = biometrics_engine.clear_all_speakers()
     return {
         "status": "success",
