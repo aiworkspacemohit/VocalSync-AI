@@ -313,7 +313,10 @@ async def room_websocket_endpoint(
             # Binary audio stream from participant's microphone
             if "bytes" in message and message["bytes"]:
                 raw_bytes = message["bytes"]
-                await room.handle_audio_slice(peer_id, raw_bytes)
+                try:
+                    await room.handle_audio_slice(peer_id, raw_bytes)
+                except Exception as audio_err:
+                    logger.warning(f"[WS Room] Error processing audio slice: {audio_err}")
 
             # JSON signaling or room control messages
             elif "text" in message and message["text"]:

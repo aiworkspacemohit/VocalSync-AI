@@ -321,7 +321,7 @@ export default function MeetingSideDrawer({
                 </div>
               ) : (
                 chatMessages.map(msg => {
-                  const isMe = msg.user_name === userName;
+                  const isMe = msg.peer_id === selfInfo?.peer_id || msg.user_name?.toLowerCase() === userName?.toLowerCase();
                   return (
                     <div
                       key={msg.id}

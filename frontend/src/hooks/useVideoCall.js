@@ -11,6 +11,64 @@ const ICE_SERVERS = {
   ]
 };
 
+/**
+ * Resamples float32 samples from native inputRate (e.g. 44.1k/48k) to 16,000 Hz.
+ * Ensures speech recognition and biometrics receive pitch-perfect audio.
+ */
+function resampleTo16k(inputSamples, inputRate, targetRate = 16000) {
+  if (inputRate === targetRate) {
+    return inputSamples;
+  }
+  const ratio = inputRate / targetRate;
+  const newLength = Math.round(inputSamples.length / ratio);
+  const result = new Float32Array(newLength);
+
+  for (let i = 0; i < newLength; i++) {
+    const sourceIndex = i * ratio;
+    const indexLow = Math.floor(sourceIndex);
+    const indexHigh = Math.min(indexLow + 1, inputSamples.length - 1);
+    const fraction = sourceIndex - indexLow;
+    result[i] = inputSamples[indexLow] * (1 - fraction) + inputSamples[indexHigh] * fraction;
+  }
+  return result;
+}
+
+/**
+ * Encodes float32 PCM samples into a standard 16kHz 16-bit Mono WAV ArrayBuffer
+ */
+function encodeFloat32ToWav(samples, sampleRate = 16000) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  const writeString = (offset, string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+
+  return buffer;
+}
+
 export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
   const [isConnected, setIsConnected] = useState(false);
   const [participants, setParticipants] = useState([]);
@@ -33,42 +91,59 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
   const audioContextRef = useRef(null);
   const scriptProcessorRef = useRef(null);
   const activeSpeakerTimeoutRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const mountedRef = useRef(true);
 
-  // Keep localStreamRef synchronized
+  // Stable references for audio processor
+  const isMutedRef = useRef(isMuted);
+  const selfInfoRef = useRef(selfInfo);
+  const userNameRef = useRef(userName);
+  const triggerActiveSpeakerRef = useRef(null);
+
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
+
+  useEffect(() => {
+    selfInfoRef.current = selfInfo;
+  }, [selfInfo]);
+
+  useEffect(() => {
+    userNameRef.current = userName;
+  }, [userName]);
+
   useEffect(() => {
     localStreamRef.current = localStream;
   }, [localStream]);
 
-  // Initialize or acquire local media
+  // Acquire local media if not already provided
   useEffect(() => {
-    let mounted = true;
-
-    // Check if initial stream has active tracks
+    let active = true;
     const hasLiveTracks = localStream && localStream.getTracks().some(t => t.readyState === 'live');
 
     if (!hasLiveTracks) {
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         .then(stream => {
-          if (mounted) {
+          if (active) {
             setLocalStream(stream);
             localStreamRef.current = stream;
           }
         })
         .catch(err => {
-          console.warn('Could not acquire camera + mic, trying audio only:', err);
+          console.warn('Camera + mic unavailable, falling back to audio only:', err);
           navigator.mediaDevices.getUserMedia({ audio: true })
             .then(stream => {
-              if (mounted) {
+              if (active) {
                 setLocalStream(stream);
                 localStreamRef.current = stream;
               }
             })
-            .catch(e => console.warn('Audio fallback error:', e));
+            .catch(e => console.warn('Microphone error:', e));
         });
     }
 
     return () => {
-      mounted = false;
+      active = false;
     };
   }, [localStream]);
 
@@ -78,11 +153,14 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
     if (activeSpeakerTimeoutRef.current) {
       clearTimeout(activeSpeakerTimeoutRef.current);
     }
-    // Highlight remains for 3.5 seconds
     activeSpeakerTimeoutRef.current = setTimeout(() => {
       setActiveSpeaker(null);
-    }, 3500);
+    }, 4000);
   }, []);
+
+  useEffect(() => {
+    triggerActiveSpeakerRef.current = triggerActiveSpeaker;
+  }, [triggerActiveSpeaker]);
 
   // WebRTC Helper: Create and configure PeerConnection for a remote peer
   const createPeerConnection = useCallback((remotePeerId) => {
@@ -96,7 +174,11 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
     // Add local tracks to peer connection
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
-        pc.addTrack(track, localStreamRef.current);
+        try {
+          pc.addTrack(track, localStreamRef.current);
+        } catch (e) {
+          console.warn('[WebRTC] addTrack warning:', e);
+        }
       });
     }
 
@@ -121,15 +203,16 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
     };
 
     pc.onconnectionstatechange = () => {
+      console.log(`[WebRTC] Peer ${remotePeerId} connection state: ${pc.connectionState}`);
       if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        console.log(`[WebRTC] Peer ${remotePeerId} connection state:`, pc.connectionState);
+        // Clean up stream if peer disconnected
       }
     };
 
     return pc;
   }, []);
 
-  // WebRTC Helper: Initiate an offer to a remote peer
+  // WebRTC Helper: Initiate an offer to a remote peer (caller side)
   const initiateCall = useCallback(async (remotePeerId) => {
     try {
       const pc = createPeerConnection(remotePeerId);
@@ -148,48 +231,6 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
     }
   }, [createPeerConnection]);
 
-  // Connect to WebSocket room signaling & audio gateway
-  useEffect(() => {
-    if (!roomId) return;
-
-    const wsUrl = `${WS_BASE_URL}/ws/room/${roomId}/${peerIdRef.current}?user_name=${encodeURIComponent(userName || 'Guest')}`;
-    const ws = new WebSocket(wsUrl);
-    socketRef.current = ws;
-
-    ws.onopen = () => {
-      console.log(`[VideoCall WS] Connected to room: ${roomId}`);
-      setIsConnected(true);
-    };
-
-    ws.onmessage = async (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        await handleSocketMessage(data);
-      } catch (err) {
-        console.error('[VideoCall WS] Error parsing message:', err);
-      }
-    };
-
-    ws.onclose = () => {
-      console.log('[VideoCall WS] Disconnected');
-      setIsConnected(false);
-      // Clean up peer connections
-      Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
-      peerConnectionsRef.current = {};
-      setRemoteStreams({});
-    };
-
-    ws.onerror = (err) => {
-      console.error('[VideoCall WS] Error:', err);
-    };
-
-    return () => {
-      ws.close();
-      Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
-      peerConnectionsRef.current = {};
-    };
-  }, [roomId, userName]);
-
   // Handle incoming WebSocket messages
   const handleSocketMessage = useCallback(async (data) => {
     switch (data.type) {
@@ -198,19 +239,16 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
         setParticipants(data.participants || []);
         if (data.transcript_history) setTranscriptHistory(data.transcript_history);
         if (data.chat_messages) setChatMessages(data.chat_messages);
-
-        // Initiate WebRTC peer connection to any peers already present in the room
-        const existingPeers = (data.participants || []).filter(p => p.peer_id !== peerIdRef.current);
-        for (const peer of existingPeers) {
-          await initiateCall(peer.peer_id);
-        }
+        // Note: New joiner does NOT call initiateCall on existing peers.
+        // Existing peers will receive USER_JOINED and initiate the offer to avoid glare/collision.
         break;
       }
 
       case 'USER_JOINED': {
         setParticipants(data.participants || []);
-        // The peer that was already in the room initiates the WebRTC offer to the newly joined peer
+        // The peer that was ALREADY in the room initiates the WebRTC offer to the newly joined peer
         if (data.participant && data.participant.peer_id !== peerIdRef.current) {
+          console.log(`[WebRTC] New user joined (${data.participant.user_name}), initiating call...`);
           await initiateCall(data.participant.peer_id);
         }
         break;
@@ -220,7 +258,9 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
         setParticipants(data.participants || []);
         if (data.peer_id) {
           if (peerConnectionsRef.current[data.peer_id]) {
-            peerConnectionsRef.current[data.peer_id].close();
+            try {
+              peerConnectionsRef.current[data.peer_id].close();
+            } catch (e) {}
             delete peerConnectionsRef.current[data.peer_id];
           }
           setRemoteStreams(prev => {
@@ -240,24 +280,41 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
         const pc = createPeerConnection(fromPeerId);
 
         if (signal.sdp) {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-          if (signal.sdp.type === 'offer') {
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
+          try {
+            if (signal.sdp.type === 'offer') {
+              // Roll back if collision occurs
+              if (pc.signalingState !== 'stable') {
+                await Promise.all([
+                  pc.setLocalDescription({ type: 'rollback' }).catch(() => {}),
+                  pc.setRemoteDescription(new RTCSessionDescription(signal.sdp))
+                ]);
+              } else {
+                await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+              }
 
-            if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-              socketRef.current.send(JSON.stringify({
-                type: 'WEBRTC_SIGNAL',
-                to_peer_id: fromPeerId,
-                signal: { sdp: pc.localDescription }
-              }));
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+
+              if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                socketRef.current.send(JSON.stringify({
+                  type: 'WEBRTC_SIGNAL',
+                  to_peer_id: fromPeerId,
+                  signal: { sdp: pc.localDescription }
+                }));
+              }
+            } else if (signal.sdp.type === 'answer') {
+              if (pc.signalingState === 'have-local-offer') {
+                await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+              }
             }
+          } catch (sdpErr) {
+            console.warn('[WebRTC] SDP signaling warning:', sdpErr);
           }
         } else if (signal.candidate) {
           try {
             await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
           } catch (err) {
-            console.warn('[WebRTC] Error adding ICE candidate:', err);
+            console.warn('[WebRTC] Candidate warning:', err);
           }
         }
         break;
@@ -274,7 +331,13 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
       }
 
       case 'CHAT_MESSAGE': {
-        setChatMessages(prev => [...prev, data.message]);
+        if (data.message) {
+          setChatMessages(prev => {
+            // Avoid duplicates
+            if (prev.some(m => m.id === data.message.id)) return prev;
+            return [...prev, data.message];
+          });
+        }
         break;
       }
 
@@ -293,95 +356,188 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
     }
   }, [createPeerConnection, initiateCall, triggerActiveSpeaker]);
 
-  // Web Audio API: Stream live microphone slices (3.0s WAV) to WebSocket for Biometric ASR
+  // Connect to WebSocket room signaling & audio gateway with auto-reconnection
   useEffect(() => {
-    if (!localStream || !isConnected || isMuted) return;
+    if (!roomId) return;
+    mountedRef.current = true;
+
+    function connect() {
+      if (!mountedRef.current) return;
+
+      const wsUrl = `${WS_BASE_URL}/ws/room/${roomId}/${peerIdRef.current}?user_name=${encodeURIComponent(userName || 'Guest')}`;
+      console.log(`[VideoCall WS] Connecting to: ${wsUrl}`);
+      const ws = new WebSocket(wsUrl);
+      socketRef.current = ws;
+
+      ws.onopen = () => {
+        console.log(`[VideoCall WS] Connected to room: ${roomId}`);
+        setIsConnected(true);
+      };
+
+      ws.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          await handleSocketMessage(data);
+        } catch (err) {
+          console.error('[VideoCall WS] Error parsing message:', err);
+        }
+      };
+
+      ws.onclose = (event) => {
+        console.log('[VideoCall WS] Disconnected:', event.code, event.reason);
+        setIsConnected(false);
+
+        // Auto-reconnect if still mounted in the room
+        if (mountedRef.current) {
+          if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+          reconnectTimeoutRef.current = setTimeout(() => {
+            console.log('[VideoCall WS] Reconnecting...');
+            connect();
+          }, 2000);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error('[VideoCall WS] Socket error:', err);
+      };
+    }
+
+    connect();
+
+    return () => {
+      mountedRef.current = false;
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      if (socketRef.current) {
+        socketRef.current.close();
+        socketRef.current = null;
+      }
+      Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
+      peerConnectionsRef.current = {};
+    };
+  }, [roomId, userName, handleSocketMessage]);
+
+  // Web Audio API: Live Microphone Slices (2.5s 16kHz WAV) for Speech Recognition & Biometrics
+  useEffect(() => {
+    if (!localStream || !isConnected) return;
+
+    let audioCtx = null;
+    let scriptNode = null;
+    let sourceNode = null;
 
     try {
       const audioTrack = localStream.getAudioTracks()[0];
       if (!audioTrack) return;
 
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      // Use native AudioContext and resample to 16kHz
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      audioCtx = new AudioCtx();
       audioContextRef.current = audioCtx;
 
-      const source = audioCtx.createMediaStreamSource(new MediaStream([audioTrack]));
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+
+      sourceNode = audioCtx.createMediaStreamSource(new MediaStream([audioTrack]));
       const bufferSize = 4096;
-      const scriptNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
+      scriptNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
       scriptProcessorRef.current = scriptNode;
 
-      let recordedSamples = [];
-      const samplesTarget = 16000 * 3.0; // 3.0s conversational slice
+      let pcm16Buffer = [];
+      let accumulatedSamples = 0;
+      const targetSamples = 16000 * 2.5; // 2.5s conversational slice = 40,000 samples
 
       scriptNode.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0);
-        recordedSamples.push(new Float32Array(inputData));
+        // If muted or closed, discard
+        if (isMutedRef.current || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+          pcm16Buffer = [];
+          accumulatedSamples = 0;
+          return;
+        }
 
-        let currentTotal = recordedSamples.reduce((acc, curr) => acc + curr.length, 0);
-        if (currentTotal >= samplesTarget) {
-          const merged = new Float32Array(currentTotal);
+        const inputData = e.inputBuffer.getChannelData(0);
+
+        // 1. Resample native samples (44.1k/48k) to 16,000 Hz
+        const resampled = resampleTo16k(inputData, audioCtx.sampleRate, 16000);
+        pcm16Buffer.push(resampled);
+        accumulatedSamples += resampled.length;
+
+        // 2. When target duration reached, package WAV slice
+        if (accumulatedSamples >= targetSamples) {
+          const merged = new Float32Array(accumulatedSamples);
           let offset = 0;
-          for (const chunk of recordedSamples) {
+          for (const chunk of pcm16Buffer) {
             merged.set(chunk, offset);
             offset += chunk.length;
           }
-          recordedSamples = [];
+          pcm16Buffer = [];
+          accumulatedSamples = 0;
 
-          // Local voice activity detection
+          // Check voice activity via RMS
           let sumSquares = 0;
           for (let i = 0; i < merged.length; i++) sumSquares += merged[i] * merged[i];
           const rms = Math.sqrt(sumSquares / merged.length);
 
-          // If local speech detected, highlight self card immediately
-          if (rms > 0.003 && selfInfo) {
-            triggerActiveSpeaker({
-              peer_id: peerIdRef.current,
-              user_name: userName,
-              speaker: userName,
-              color: selfInfo.color,
-              confidence: 95
-            });
+          // If speech is detected locally, highlight self card immediately
+          if (rms > 0.001) {
+            const selfObj = selfInfoRef.current;
+            const uname = userNameRef.current || 'You';
+            if (triggerActiveSpeakerRef.current) {
+              triggerActiveSpeakerRef.current({
+                peer_id: peerIdRef.current,
+                user_name: uname,
+                speaker: uname,
+                color: selfObj?.color || { border: '#10b981', bg: 'rgba(16, 185, 129, 0.15)' },
+                confidence: 95
+              });
+            }
           }
 
-          // Encode to standard 16kHz PCM WAV and stream to server
-          const wavBytes = encodeFloat32ToWav(merged, 16000);
-          if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+          // Encode to standard 16kHz WAV and stream to server for Whisper & Biometrics
+          if (rms > 0.0003 && socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+            const wavBytes = encodeFloat32ToWav(merged, 16000);
             socketRef.current.send(wavBytes);
           }
         }
       };
 
-      source.connect(scriptNode);
+      sourceNode.connect(scriptNode);
       scriptNode.connect(audioCtx.destination);
     } catch (err) {
       console.warn('Error starting audio processor for room biometrics:', err);
     }
 
     return () => {
-      if (scriptProcessorRef.current) scriptProcessorRef.current.disconnect();
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close().catch(() => {});
+      if (scriptNode) {
+        try { scriptNode.disconnect(); } catch (e) {}
+      }
+      if (sourceNode) {
+        try { sourceNode.disconnect(); } catch (e) {}
+      }
+      if (audioCtx && audioCtx.state !== 'closed') {
+        try { audioCtx.close(); } catch (e) {}
       }
     };
-  }, [localStream, isConnected, isMuted, selfInfo, userName, triggerActiveSpeaker]);
+  }, [localStream, isConnected]);
 
   // Media Toggle Handlers
   const toggleMute = useCallback(() => {
-    if (localStream) {
-      const audioTrack = localStream.getAudioTracks()[0];
+    if (localStreamRef.current) {
+      const audioTrack = localStreamRef.current.getAudioTracks()[0];
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         const newMuted = !audioTrack.enabled;
         setIsMuted(newMuted);
+        isMutedRef.current = newMuted;
         if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
           socketRef.current.send(JSON.stringify({ type: 'TOGGLE_MIC', is_muted: newMuted }));
         }
       }
     }
-  }, [localStream]);
+  }, []);
 
   const toggleCamera = useCallback(() => {
-    if (localStream) {
-      const videoTrack = localStream.getVideoTracks()[0];
+    if (localStreamRef.current) {
+      const videoTrack = localStreamRef.current.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.enabled = !videoTrack.enabled;
         const newCamOff = !videoTrack.enabled;
@@ -391,7 +547,7 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
         }
       }
     }
-  }, [localStream]);
+  }, []);
 
   const toggleHandRaise = useCallback(() => {
     const nextState = !isHandRaised;
@@ -433,11 +589,16 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
   }, [isScreenSharing, screenStream]);
 
   const sendChatMessage = useCallback((text) => {
-    if (!text || !text.trim() || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
-    socketRef.current.send(JSON.stringify({
-      type: 'CHAT_MESSAGE',
-      text: text.trim()
-    }));
+    if (!text || !text.trim()) return;
+    const cleanText = text.trim();
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({
+        type: 'CHAT_MESSAGE',
+        text: cleanText
+      }));
+    } else {
+      console.warn('[Chat] Message queued or socket disconnected. Attempting to send on reconnect.');
+    }
   }, []);
 
   return {
@@ -460,38 +621,4 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
     toggleScreenShare,
     sendChatMessage
   };
-}
-
-// Utility: Encodes float32 PCM array into 16kHz WAV format with 44-byte RIFF header
-function encodeFloat32ToWav(samples, sampleRate) {
-  const buffer = new ArrayBuffer(44 + samples.length * 2);
-  const view = new DataView(buffer);
-
-  const writeString = (offset, string) => {
-    for (let i = 0; i < string.length; i++) {
-      view.setUint8(offset + i, string.charCodeAt(i));
-    }
-  };
-
-  writeString(0, 'RIFF');
-  view.setUint32(4, 36 + samples.length * 2, true);
-  writeString(8, 'WAVE');
-  writeString(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, 1, true); // mono
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeString(36, 'data');
-  view.setUint32(40, samples.length * 2, true);
-
-  let offset = 44;
-  for (let i = 0; i < samples.length; i++, offset += 2) {
-    const s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-  }
-
-  return buffer;
 }

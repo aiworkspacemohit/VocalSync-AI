@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import logging
 import random
@@ -120,7 +121,7 @@ class RoomSession:
 
     async def broadcast(self, message: dict, exclude: Optional[str] = None):
         dead_peers = []
-        for pid, part in self.participants.items():
+        for pid, part in list(self.participants.items()):
             if exclude and pid == exclude:
                 continue
             try:
@@ -128,84 +129,96 @@ class RoomSession:
             except Exception as e:
                 logger.debug(f"[Room {self.room_id}] Error broadcasting to {pid}: {e}")
                 dead_peers.append(pid)
+
+        # Safely remove disconnected peers without recursive broadcast storm
         for dp in dead_peers:
-            await self.remove_participant(dp)
+            if dp in self.participants:
+                part = self.participants.pop(dp, None)
+                if part:
+                    logger.info(f"[Room {self.room_id}] Cleaned up dropped peer: {part.user_name} ({dp})")
 
     async def handle_audio_slice(self, peer_id: str, audio_bytes: bytes):
-        part = self.participants.get(peer_id)
-        if not part or part.is_muted:
-            return
+        try:
+            part = self.participants.get(peer_id)
+            if not part or part.is_muted:
+                return
 
-        audio_array = decode_audio_bytes_to_mono_16k(audio_bytes)
-        if len(audio_array) == 0:
-            return
+            audio_array = decode_audio_bytes_to_mono_16k(audio_bytes)
+            if len(audio_array) == 0:
+                return
 
-        part.audio_buffer.extend(audio_array.tolist())
-        target_len = int(settings.SAMPLE_RATE * 3.0)
+            part.audio_buffer.extend(audio_array.tolist())
+            target_len = int(settings.SAMPLE_RATE * 3.0)
 
-        # Process when at least 2.5s of speech or full slice received
-        if len(part.audio_buffer) >= target_len:
-            process_slice = np.array(part.audio_buffer[:target_len], dtype=np.float32)
-            part.audio_buffer = part.audio_buffer[target_len:]
-        elif len(audio_array) >= int(settings.SAMPLE_RATE * 2.0):
-            process_slice = audio_array
-            part.audio_buffer.clear()
-        else:
-            return
+            # Process when at least 2.5s of speech or full slice received
+            if len(part.audio_buffer) >= target_len:
+                process_slice = np.array(part.audio_buffer[:target_len], dtype=np.float32)
+                part.audio_buffer = part.audio_buffer[target_len:]
+            elif len(audio_array) >= int(settings.SAMPLE_RATE * 2.0):
+                process_slice = audio_array
+                part.audio_buffer.clear()
+            else:
+                return
 
-        rms = float(np.sqrt(np.mean(process_slice ** 2)))
-        if rms < 0.00008:
-            return
+            rms = float(np.sqrt(np.mean(process_slice ** 2)))
+            if rms < 0.00005:
+                return
 
-        # 1. Biometric Identification
-        identified_speaker, confidence, is_continuity = biometrics_engine.identify_speaker(
-            process_slice,
-            last_active_speaker=self.last_active_speaker
-        )
+            # 1. Biometric Identification (Offload heavy Torch computation to thread)
+            identified_speaker, confidence, is_continuity = await asyncio.to_thread(
+                biometrics_engine.identify_speaker,
+                process_slice,
+                self.last_active_speaker
+            )
 
-        # If identified as guest, or participant's name is known, prefer participant identity with match info
-        display_speaker = identified_speaker
-        if identified_speaker in ("Guest", "Unknown Guest"):
-            display_speaker = part.user_name
+            # Prefer enrolled voice identity if verified, otherwise participant name
+            display_speaker = identified_speaker
+            if identified_speaker in ("Guest", "Unknown Guest") or confidence < 35:
+                display_speaker = part.user_name
 
-        self.last_active_speaker = display_speaker
+            self.last_active_speaker = display_speaker
 
-        # 2. Faster-Whisper ASR Transcription
-        text = asr_engine.transcribe_chunk(process_slice)
-        if not text:
-            return
+            # 2. Faster-Whisper ASR Transcription (Offload heavy CTranslate2 model to thread)
+            text = await asyncio.to_thread(
+                asr_engine.transcribe_chunk,
+                process_slice
+            )
+            if not text:
+                return
 
-        now_str = datetime.datetime.now().strftime("%H:%M:%S")
-        chunk_id = f"chunk_{int(datetime.datetime.now().timestamp() * 1000)}"
+            now_str = datetime.datetime.now().strftime("%H:%M:%S")
+            chunk_id = f"chunk_{int(datetime.datetime.now().timestamp() * 1000)}"
 
-        transcript_chunk = {
-            "id": chunk_id,
-            "type": "TRANSCRIPT_CHUNK",
-            "speaker": display_speaker,
-            "peer_id": peer_id,
-            "user_name": part.user_name,
-            "confidence": confidence,
-            "text": text,
-            "timestamp": now_str,
-            "is_continuity": is_continuity,
-            "speaker_color": part.color_style
-        }
-
-        self.transcript_history.append(transcript_chunk)
-        logger.info(f"[Room {self.room_id}] [{display_speaker} ({confidence}%)]: {text}")
-
-        # Broadcast transcript + active speaker highlight event
-        await self.broadcast({
-            "type": "TRANSCRIPT_CHUNK",
-            "chunk": transcript_chunk,
-            "active_speaker": {
+            transcript_chunk = {
+                "id": chunk_id,
+                "type": "TRANSCRIPT_CHUNK",
+                "speaker": display_speaker,
                 "peer_id": peer_id,
                 "user_name": part.user_name,
-                "speaker": display_speaker,
-                "color": part.color_style,
-                "confidence": confidence
+                "confidence": confidence,
+                "text": text,
+                "timestamp": now_str,
+                "is_continuity": is_continuity,
+                "speaker_color": part.color_style
             }
-        })
+
+            self.transcript_history.append(transcript_chunk)
+            logger.info(f"[Room {self.room_id}] Spoken by [{display_speaker} ({confidence}%)]: {text}")
+
+            # Broadcast transcript + active speaker highlight event
+            await self.broadcast({
+                "type": "TRANSCRIPT_CHUNK",
+                "chunk": transcript_chunk,
+                "active_speaker": {
+                    "peer_id": peer_id,
+                    "user_name": part.user_name,
+                    "speaker": display_speaker,
+                    "color": part.color_style,
+                    "confidence": confidence
+                }
+            })
+        except Exception as ex:
+            logger.error(f"[Room {self.room_id}] Error in handle_audio_slice for {peer_id}: {ex}", exc_info=True)
 
 
 class RoomManager:
