@@ -143,17 +143,7 @@ export default function MeetingBottomBar({
           <Subtitles className="w-5 h-5" />
         </button>
 
-        {/* Demo Helper: Add up to 20 Attendees */}
-        {participantCount < 20 && onAddDemoAttendees && (
-          <button
-            onClick={onAddDemoAttendees}
-            className="hidden sm:flex items-center gap-1.5 px-3.5 h-11 rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-900 border border-zinc-700 text-xs font-bold transition-all shadow-xs"
-            title="Simulate 20 attendees in meeting to test the 20-people grid & active speaker borders"
-          >
-            <UserPlus className="w-4 h-4 text-zinc-700" />
-            <span>20 Attendees</span>
-          </button>
-        )}
+
 
         {/* End Call Button */}
         <button

@@ -6,8 +6,10 @@ export default function VideoGrid({
   participants = [],
   selfInfo = null,
   localStream = null,
+  remoteStreams = {},
   screenStream = null,
   activeSpeaker = null,
+  transcriptHistory = [],
   userName = 'You'
 }) {
   const [pinnedPeerId, setPinnedPeerId] = useState(null);
@@ -27,7 +29,7 @@ export default function VideoGrid({
     }
   };
 
-  // Filter out self if accidentally present in participants list
+  // Filter out self if present in participants list
   const remoteParticipants = participants.filter(
     p => p.peer_id !== selfParticipant.peer_id && p.peer_id !== 'self'
   );
@@ -35,20 +37,29 @@ export default function VideoGrid({
   const allAttendees = [selfParticipant, ...remoteParticipants];
   const totalCount = allAttendees.length;
 
-  // Determine optimal responsive grid class based on participant count (up to 20+)
+  // Determine optimal responsive grid class based on participant count
   const getGridClass = (count) => {
     if (pinnedPeerId || screenStream) {
       return 'grid-cols-1 md:grid-cols-4'; // Pinned layout: 3 cols main + 1 col strip
     }
-    if (count <= 1) return 'grid-cols-1 max-w-4xl mx-auto';
-    if (count === 2) return 'grid-cols-1 md:grid-cols-2 max-w-5xl mx-auto';
-    if (count <= 4) return 'grid-cols-2 max-w-5xl mx-auto';
+    if (count <= 1) return 'grid-cols-1 max-w-3xl mx-auto h-full max-h-[75vh]';
+    if (count === 2) return 'grid-cols-1 md:grid-cols-2 max-w-5xl mx-auto h-full max-h-[75vh]';
+    if (count <= 4) return 'grid-cols-1 sm:grid-cols-2 max-w-5xl mx-auto h-full max-h-[78vh]';
     if (count <= 6) return 'grid-cols-2 md:grid-cols-3';
-    if (count <= 9) return 'grid-cols-3';
+    if (count <= 9) return 'grid-cols-2 md:grid-cols-3';
     if (count <= 12) return 'grid-cols-3 md:grid-cols-4';
     if (count <= 16) return 'grid-cols-4';
     // 17 to 20+ participants
     return 'grid-cols-4 md:grid-cols-5';
+  };
+
+  // Helper to extract the latest spoken sentence for a participant
+  const getLatestCaption = (p) => {
+    const chunk = transcriptHistory
+      .slice()
+      .reverse()
+      .find(c => c.peer_id === p.peer_id || c.speaker?.toLowerCase() === p.user_name?.toLowerCase());
+    return chunk ? chunk.text : null;
   };
 
   // Screen Share View
@@ -73,14 +84,17 @@ export default function VideoGrid({
         <div className="w-full md:w-64 flex md:flex-col gap-2 overflow-x-auto md:overflow-y-auto shrink-0 max-h-full">
           {allAttendees.map(p => {
             const isSelf = p.peer_id === selfParticipant.peer_id;
-            const isSpeaking = activeSpeaker?.peer_id === p.peer_id;
+            const isSpeaking = activeSpeaker?.peer_id === p.peer_id || activeSpeaker?.speaker?.toLowerCase() === p.user_name?.toLowerCase();
+            const stream = isSelf ? localStream : (remoteStreams[p.peer_id] || null);
+
             return (
               <div key={p.peer_id} className="h-36 md:h-40 w-48 md:w-full shrink-0">
                 <VideoCard
                   participant={p}
                   isSelf={isSelf}
-                  stream={isSelf ? localStream : null}
+                  stream={stream}
                   isSpeaking={isSpeaking}
+                  latestCaption={getLatestCaption(p)}
                   isPinned={pinnedPeerId === p.peer_id}
                   onPin={() => setPinnedPeerId(pinnedPeerId === p.peer_id ? null : p.peer_id)}
                 />
@@ -97,7 +111,8 @@ export default function VideoGrid({
     const pinnedParticipant = allAttendees.find(p => p.peer_id === pinnedPeerId) || allAttendees[0];
     const otherParticipants = allAttendees.filter(p => p.peer_id !== pinnedParticipant.peer_id);
     const isPinnedSelf = pinnedParticipant.peer_id === selfParticipant.peer_id;
-    const isPinnedSpeaking = activeSpeaker?.peer_id === pinnedParticipant.peer_id;
+    const isPinnedSpeaking = activeSpeaker?.peer_id === pinnedParticipant.peer_id || activeSpeaker?.speaker?.toLowerCase() === pinnedParticipant.user_name?.toLowerCase();
+    const pinnedStream = isPinnedSelf ? localStream : (remoteStreams[pinnedParticipant.peer_id] || null);
 
     return (
       <div className="flex-1 flex flex-col md:flex-row gap-3 p-3 overflow-hidden h-full">
@@ -106,8 +121,9 @@ export default function VideoGrid({
           <VideoCard
             participant={pinnedParticipant}
             isSelf={isPinnedSelf}
-            stream={isPinnedSelf ? localStream : null}
+            stream={pinnedStream}
             isSpeaking={isPinnedSpeaking}
+            latestCaption={getLatestCaption(pinnedParticipant)}
             isPinned={true}
             onPin={() => setPinnedPeerId(null)}
           />
@@ -117,14 +133,17 @@ export default function VideoGrid({
         <div className="w-full md:w-64 flex md:flex-col gap-2 overflow-x-auto md:overflow-y-auto shrink-0 max-h-full">
           {otherParticipants.map(p => {
             const isSelf = p.peer_id === selfParticipant.peer_id;
-            const isSpeaking = activeSpeaker?.peer_id === p.peer_id;
+            const isSpeaking = activeSpeaker?.peer_id === p.peer_id || activeSpeaker?.speaker?.toLowerCase() === p.user_name?.toLowerCase();
+            const stream = isSelf ? localStream : (remoteStreams[p.peer_id] || null);
+
             return (
               <div key={p.peer_id} className="h-36 md:h-40 w-48 md:w-full shrink-0">
                 <VideoCard
                   participant={p}
                   isSelf={isSelf}
-                  stream={isSelf ? localStream : null}
+                  stream={stream}
                   isSpeaking={isSpeaking}
+                  latestCaption={getLatestCaption(p)}
                   isPinned={false}
                   onPin={() => setPinnedPeerId(p.peer_id)}
                 />
@@ -136,20 +155,23 @@ export default function VideoGrid({
     );
   }
 
-  // Normal Dynamic Responsive Grid (1 to 20+ cards)
+  // Normal Dynamic Responsive Grid (Shows only connected participants)
   return (
-    <div className="flex-1 p-3 overflow-y-auto flex items-center justify-center">
-      <div className={`grid gap-3 w-full h-full auto-rows-fr ${getGridClass(totalCount)}`}>
+    <div className="flex-1 p-3 md:p-4 overflow-y-auto flex items-center justify-center">
+      <div className={`grid gap-3 md:gap-4 w-full auto-rows-fr ${getGridClass(totalCount)}`}>
         {allAttendees.map(p => {
           const isSelf = p.peer_id === selfParticipant.peer_id;
-          const isSpeaking = activeSpeaker?.peer_id === p.peer_id;
+          const isSpeaking = activeSpeaker?.peer_id === p.peer_id || activeSpeaker?.speaker?.toLowerCase() === p.user_name?.toLowerCase();
+          const stream = isSelf ? localStream : (remoteStreams[p.peer_id] || null);
+
           return (
-            <div key={p.peer_id} className="min-h-[140px] md:min-h-[180px] w-full h-full">
+            <div key={p.peer_id} className="min-h-[180px] md:min-h-[220px] w-full h-full">
               <VideoCard
                 participant={p}
                 isSelf={isSelf}
-                stream={isSelf ? localStream : null}
+                stream={stream}
                 isSpeaking={isSpeaking}
+                latestCaption={getLatestCaption(p)}
                 isPinned={false}
                 onPin={() => setPinnedPeerId(p.peer_id)}
               />

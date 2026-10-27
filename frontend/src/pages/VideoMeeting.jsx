@@ -22,6 +22,7 @@ export default function VideoMeeting({ onNavigateToStudio }) {
     isConnected,
     participants,
     selfInfo,
+    remoteStreams,
     activeSpeaker,
     transcriptHistory,
     chatMessages,
@@ -34,9 +35,7 @@ export default function VideoMeeting({ onNavigateToStudio }) {
     toggleCamera,
     toggleHandRaise,
     toggleScreenShare,
-    sendChatMessage,
-    addSimulatedParticipants,
-    simulateParticipantSpeech
+    sendChatMessage
   } = useVideoCall({
     roomId,
     userName,
@@ -172,20 +171,22 @@ export default function VideoMeeting({ onNavigateToStudio }) {
         {/* Right Info: Attendees Counter */}
         <div className="flex items-center gap-3 text-xs">
           <span className="font-mono bg-zinc-100 text-zinc-900 px-2.5 py-1 rounded-lg border border-zinc-700 font-bold">
-            {participants.length} Attendee{participants.length !== 1 ? 's' : ''}
+            {Math.max(1, participants.length)} Attendee{Math.max(1, participants.length) !== 1 ? 's' : ''}
           </span>
         </div>
       </header>
 
       {/* 2. MAIN STAGE (GRID + OPTIONAL DRAWER) */}
       <main className="flex-1 flex overflow-hidden relative bg-[#f4f4f5]">
-        {/* Dynamic Video Grid (1 to 20+ people) */}
+        {/* Dynamic Video Grid (Shows only connected participants) */}
         <VideoGrid
           participants={participants}
           selfInfo={selfInfo}
           localStream={localStream}
+          remoteStreams={remoteStreams}
           screenStream={screenStream}
           activeSpeaker={activeSpeaker}
+          transcriptHistory={transcriptHistory}
           userName={userName}
         />
 
@@ -207,8 +208,6 @@ export default function VideoMeeting({ onNavigateToStudio }) {
           onChangeTab={tab => setActiveDrawer(tab)}
           onSendMessage={sendChatMessage}
           onGenerateDebrief={handleGenerateDebrief}
-          onAddDemoAttendees={() => addSimulatedParticipants(19)}
-          onSimulateSpeech={simulateParticipantSpeech}
         />
       </main>
 
@@ -220,7 +219,7 @@ export default function VideoMeeting({ onNavigateToStudio }) {
         isHandRaised={isHandRaised}
         isScreenSharing={isScreenSharing}
         activeDrawer={activeDrawer}
-        participantCount={participants.length}
+        participantCount={Math.max(1, participants.length)}
         unreadChatCount={0}
         onToggleMic={toggleMute}
         onToggleCamera={toggleCamera}
@@ -228,7 +227,6 @@ export default function VideoMeeting({ onNavigateToStudio }) {
         onToggleScreenShare={toggleScreenShare}
         onToggleDrawer={handleToggleDrawer}
         onEndCall={handleEndCall}
-        onAddDemoAttendees={() => addSimulatedParticipants(19)}
         onOpenSummarizer={handleGenerateDebrief}
       />
     </div>

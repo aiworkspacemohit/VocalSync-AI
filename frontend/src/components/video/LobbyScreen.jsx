@@ -10,7 +10,8 @@ import {
   Keyboard, 
   ArrowLeft,
   ShieldCheck,
-  Users
+  Users,
+  Dices
 } from 'lucide-react';
 import { getApiBaseUrl } from '../../config/api';
 
@@ -28,6 +29,7 @@ export default function LobbyScreen({
   const [localStream, setLocalStream] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
   const videoRef = useRef(null);
+  const hasJoinedRef = useRef(false);
 
   // Acquire camera preview on mount
   useEffect(() => {
@@ -45,7 +47,8 @@ export default function LobbyScreen({
       });
 
     return () => {
-      if (streamRef) {
+      // Only stop stream tracks if navigating AWAY from the meeting (e.g. back to studio)
+      if (streamRef && !hasJoinedRef.current) {
         streamRef.getTracks().forEach(t => t.stop());
       }
     };
@@ -71,8 +74,18 @@ export default function LobbyScreen({
     }
   };
 
+  const generateRandomCode = () => {
+    const chars = 'abcdefghijklmnopqrstuvwxyz';
+    const nums = '0123456789';
+    const p1 = 'vcl';
+    const p2 = Array.from({ length: 3 }, () => nums[Math.floor(Math.random() * nums.length)]).join('');
+    const p3 = Array.from({ length: 3 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    setMeetingCodeInput(`${p1}-${p2}-${p3}`);
+  };
+
   const handleStartNewMeeting = async () => {
     setIsCreating(true);
+    hasJoinedRef.current = true;
     try {
       const res = await fetch(`${apiBaseUrl}/api/rooms/create`, {
         method: 'POST',
@@ -83,11 +96,14 @@ export default function LobbyScreen({
         const data = await res.json();
         onCreateMeeting(data.room_id, userName, localStream);
       } else {
-        alert('Could not generate meeting code on server.');
+        // Fallback: generate local code if server route is offline
+        const fallbackCode = `vcl-${Math.floor(100 + Math.random() * 900)}-${Math.random().toString(36).substring(2, 5)}`;
+        onCreateMeeting(fallbackCode, userName, localStream);
       }
     } catch (e) {
-      console.error('Error creating meeting:', e);
-      alert('Backend connection error: ' + e.message);
+      console.warn('Backend create endpoint failed, starting local room session:', e);
+      const fallbackCode = `vcl-${Math.floor(100 + Math.random() * 900)}-${Math.random().toString(36).substring(2, 5)}`;
+      onCreateMeeting(fallbackCode, userName, localStream);
     } finally {
       setIsCreating(false);
     }
@@ -97,6 +113,7 @@ export default function LobbyScreen({
     e.preventDefault();
     const clean = meetingCodeInput.trim();
     if (!clean) return;
+    hasJoinedRef.current = true;
     onJoinMeeting(clean, userName, localStream);
   };
 
@@ -218,27 +235,40 @@ export default function LobbyScreen({
             <div className="flex-1 h-px bg-zinc-700" />
           </div>
 
-          {/* Action 2: Join Existing Code */}
-          <form onSubmit={handleJoinWithCode} className="flex gap-2">
-            <div className="relative flex-1">
-              <Keyboard className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="e.g. vcl-842-mpt"
-                value={meetingCodeInput}
-                onChange={e => setMeetingCodeInput(e.target.value)}
-                className="w-full pl-10 pr-3 py-2.5 rounded-lg bg-zinc-50 border border-zinc-700 text-xs font-mono text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-black focus:ring-1 focus:ring-black transition-colors"
-              />
-            </div>
+          {/* Action 2: Join Existing Code or Generate Code */}
+          <div className="space-y-2">
+            <form onSubmit={handleJoinWithCode} className="flex gap-2">
+              <div className="relative flex-1">
+                <Keyboard className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="e.g. vcl-842-mpt"
+                  value={meetingCodeInput}
+                  onChange={e => setMeetingCodeInput(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2.5 rounded-lg bg-zinc-50 border border-zinc-700 text-xs font-mono text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-black focus:ring-1 focus:ring-black transition-colors"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={!meetingCodeInput.trim()}
+                className="px-4 py-2.5 rounded-lg bg-black hover:bg-zinc-800 disabled:opacity-40 text-white font-bold text-xs flex items-center gap-1.5 transition-all border border-black shadow-xs shrink-0"
+              >
+                <span>Join</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </form>
+
+            {/* Random Meeting Code Generator Button */}
             <button
-              type="submit"
-              disabled={!meetingCodeInput.trim()}
-              className="px-4 py-2.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 disabled:opacity-40 text-zinc-900 font-bold text-xs flex items-center gap-1.5 transition-all border border-zinc-700 shadow-xs"
+              type="button"
+              onClick={generateRandomCode}
+              className="w-full py-2.5 px-3 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-900 text-xs font-bold flex items-center justify-center gap-2 border border-zinc-700 transition-all shadow-xs"
+              title="Click to generate a random meeting code"
             >
-              <span>Join</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <Dices className="w-4 h-4 text-zinc-800" />
+              <span>Generate Random Meeting Code</span>
             </button>
-          </form>
+          </div>
 
           {/* Highlights Info */}
           <div className="pt-3 border-t border-dashed border-zinc-700 flex items-center justify-between text-[11px] text-zinc-600 font-mono">

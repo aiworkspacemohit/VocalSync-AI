@@ -4,33 +4,18 @@ import { getApiBaseUrl, getWsBaseUrl } from '../config/api';
 const API_BASE_URL = getApiBaseUrl();
 const WS_BASE_URL = getWsBaseUrl();
 
-// 20 realistic participants for instant demo/testing of the 20-people layout
-const DEMO_PARTICIPANTS = [
-  { name: 'Mohit', role: 'Engineering Lead' },
-  { name: 'Vishesh', role: 'Product Manager' },
-  { name: 'Hardeep', role: 'Security Architect' },
-  { name: 'Rahul', role: 'Backend Engineer' },
-  { name: 'Sachin', role: 'Frontend Specialist' },
-  { name: 'Ayush Yadav', role: 'Data Scientist' },
-  { name: 'Stanlee', role: 'DevOps Lead' },
-  { name: 'Sarah Jenkins', role: 'VP Operations' },
-  { name: 'David Chen', role: 'UX Designer' },
-  { name: 'Elena Rostova', role: 'QA Lead' },
-  { name: 'Marcus Brody', role: 'Scrum Master' },
-  { name: 'Priya Sharma', role: 'Cloud Architect' },
-  { name: 'Alexandre Dubois', role: 'Solutions Engineer' },
-  { name: 'Maya Lin', role: 'Product Marketing' },
-  { name: 'Carlos Mendez', role: 'Database Admin' },
-  { name: 'Fatima Al-Sayed', role: 'Compliance Officer' },
-  { name: 'Tetsuo Tanaka', role: 'Mobile Lead' },
-  { name: 'Hannah Schmidt', role: 'Customer Success' },
-  { name: 'Liam O’Connor', role: 'Site Reliability' }
-];
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ]
+};
 
 export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
   const [isConnected, setIsConnected] = useState(false);
   const [participants, setParticipants] = useState([]);
   const [selfInfo, setSelfInfo] = useState(null);
+  const [remoteStreams, setRemoteStreams] = useState({});
   const [activeSpeaker, setActiveSpeaker] = useState(null);
   const [transcriptHistory, setTranscriptHistory] = useState([]);
   const [chatMessages, setChatMessages] = useState([]);
@@ -43,23 +28,41 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
 
   const socketRef = useRef(null);
   const peerIdRef = useRef(`peer_${Math.random().toString(36).substring(2, 9)}`);
+  const peerConnectionsRef = useRef({});
+  const localStreamRef = useRef(initialLocalStream);
   const audioContextRef = useRef(null);
   const scriptProcessorRef = useRef(null);
   const activeSpeakerTimeoutRef = useRef(null);
 
-  // Initialize or capture local media
+  // Keep localStreamRef synchronized
+  useEffect(() => {
+    localStreamRef.current = localStream;
+  }, [localStream]);
+
+  // Initialize or acquire local media
   useEffect(() => {
     let mounted = true;
-    if (!localStream) {
+
+    // Check if initial stream has active tracks
+    const hasLiveTracks = localStream && localStream.getTracks().some(t => t.readyState === 'live');
+
+    if (!hasLiveTracks) {
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         .then(stream => {
-          if (mounted) setLocalStream(stream);
+          if (mounted) {
+            setLocalStream(stream);
+            localStreamRef.current = stream;
+          }
         })
         .catch(err => {
-          console.warn('Could not acquire default video/audio stream:', err);
-          // Fallback to audio only
+          console.warn('Could not acquire camera + mic, trying audio only:', err);
           navigator.mediaDevices.getUserMedia({ audio: true })
-            .then(stream => { if (mounted) setLocalStream(stream); })
+            .then(stream => {
+              if (mounted) {
+                setLocalStream(stream);
+                localStreamRef.current = stream;
+              }
+            })
             .catch(e => console.warn('Audio fallback error:', e));
         });
     }
@@ -68,6 +71,82 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
       mounted = false;
     };
   }, [localStream]);
+
+  // Set active speaker with auto-clearing timer
+  const triggerActiveSpeaker = useCallback((speakerInfo) => {
+    setActiveSpeaker(speakerInfo);
+    if (activeSpeakerTimeoutRef.current) {
+      clearTimeout(activeSpeakerTimeoutRef.current);
+    }
+    // Highlight remains for 3.5 seconds
+    activeSpeakerTimeoutRef.current = setTimeout(() => {
+      setActiveSpeaker(null);
+    }, 3500);
+  }, []);
+
+  // WebRTC Helper: Create and configure PeerConnection for a remote peer
+  const createPeerConnection = useCallback((remotePeerId) => {
+    if (peerConnectionsRef.current[remotePeerId]) {
+      return peerConnectionsRef.current[remotePeerId];
+    }
+
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+    peerConnectionsRef.current[remotePeerId] = pc;
+
+    // Add local tracks to peer connection
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
+        pc.addTrack(track, localStreamRef.current);
+      });
+    }
+
+    // ICE Candidate handler
+    pc.onicecandidate = (event) => {
+      if (event.candidate && socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'WEBRTC_SIGNAL',
+          to_peer_id: remotePeerId,
+          signal: { candidate: event.candidate }
+        }));
+      }
+    };
+
+    // Remote Track handler (receives audio/video from remote peer)
+    pc.ontrack = (event) => {
+      const incomingStream = event.streams[0] || new MediaStream([event.track]);
+      setRemoteStreams(prev => ({
+        ...prev,
+        [remotePeerId]: incomingStream
+      }));
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        console.log(`[WebRTC] Peer ${remotePeerId} connection state:`, pc.connectionState);
+      }
+    };
+
+    return pc;
+  }, []);
+
+  // WebRTC Helper: Initiate an offer to a remote peer
+  const initiateCall = useCallback(async (remotePeerId) => {
+    try {
+      const pc = createPeerConnection(remotePeerId);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'WEBRTC_SIGNAL',
+          to_peer_id: remotePeerId,
+          signal: { sdp: pc.localDescription }
+        }));
+      }
+    } catch (err) {
+      console.error(`[WebRTC] Error initiating call to ${remotePeerId}:`, err);
+    }
+  }, [createPeerConnection]);
 
   // Connect to WebSocket room signaling & audio gateway
   useEffect(() => {
@@ -82,10 +161,10 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
       setIsConnected(true);
     };
 
-    ws.onmessage = (event) => {
+    ws.onmessage = async (event) => {
       try {
         const data = JSON.parse(event.data);
-        handleSocketMessage(data);
+        await handleSocketMessage(data);
       } catch (err) {
         console.error('[VideoCall WS] Error parsing message:', err);
       }
@@ -94,6 +173,10 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
     ws.onclose = () => {
       console.log('[VideoCall WS] Disconnected');
       setIsConnected(false);
+      // Clean up peer connections
+      Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
+      peerConnectionsRef.current = {};
+      setRemoteStreams({});
     };
 
     ws.onerror = (err) => {
@@ -102,28 +185,85 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
 
     return () => {
       ws.close();
+      Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
+      peerConnectionsRef.current = {};
     };
   }, [roomId, userName]);
 
   // Handle incoming WebSocket messages
-  const handleSocketMessage = useCallback((data) => {
+  const handleSocketMessage = useCallback(async (data) => {
     switch (data.type) {
-      case 'ROOM_STATE':
+      case 'ROOM_STATE': {
         setSelfInfo(data.self);
         setParticipants(data.participants || []);
         if (data.transcript_history) setTranscriptHistory(data.transcript_history);
         if (data.chat_messages) setChatMessages(data.chat_messages);
-        break;
 
-      case 'USER_JOINED':
+        // Initiate WebRTC peer connection to any peers already present in the room
+        const existingPeers = (data.participants || []).filter(p => p.peer_id !== peerIdRef.current);
+        for (const peer of existingPeers) {
+          await initiateCall(peer.peer_id);
+        }
+        break;
+      }
+
+      case 'USER_JOINED': {
         setParticipants(data.participants || []);
+        // The peer that was already in the room initiates the WebRTC offer to the newly joined peer
+        if (data.participant && data.participant.peer_id !== peerIdRef.current) {
+          await initiateCall(data.participant.peer_id);
+        }
         break;
+      }
 
-      case 'USER_LEFT':
+      case 'USER_LEFT': {
         setParticipants(data.participants || []);
+        if (data.peer_id) {
+          if (peerConnectionsRef.current[data.peer_id]) {
+            peerConnectionsRef.current[data.peer_id].close();
+            delete peerConnectionsRef.current[data.peer_id];
+          }
+          setRemoteStreams(prev => {
+            const next = { ...prev };
+            delete next[data.peer_id];
+            return next;
+          });
+        }
         break;
+      }
 
-      case 'PARTICIPANT_UPDATE':
+      case 'WEBRTC_SIGNAL': {
+        const fromPeerId = data.from_peer_id;
+        const signal = data.signal;
+        if (!fromPeerId || !signal) break;
+
+        const pc = createPeerConnection(fromPeerId);
+
+        if (signal.sdp) {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          if (signal.sdp.type === 'offer') {
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+              socketRef.current.send(JSON.stringify({
+                type: 'WEBRTC_SIGNAL',
+                to_peer_id: fromPeerId,
+                signal: { sdp: pc.localDescription }
+              }));
+            }
+          }
+        } else if (signal.candidate) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+          } catch (err) {
+            console.warn('[WebRTC] Error adding ICE candidate:', err);
+          }
+        }
+        break;
+      }
+
+      case 'PARTICIPANT_UPDATE': {
         setParticipants(prev => prev.map(p => {
           if (p.peer_id === data.peer_id) {
             return { ...p, ...data.updates };
@@ -131,12 +271,14 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
           return p;
         }));
         break;
+      }
 
-      case 'CHAT_MESSAGE':
+      case 'CHAT_MESSAGE': {
         setChatMessages(prev => [...prev, data.message]);
         break;
+      }
 
-      case 'TRANSCRIPT_CHUNK':
+      case 'TRANSCRIPT_CHUNK': {
         if (data.chunk) {
           setTranscriptHistory(prev => [...prev, data.chunk]);
         }
@@ -144,23 +286,12 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
           triggerActiveSpeaker(data.active_speaker);
         }
         break;
+      }
 
       default:
         break;
     }
-  }, []);
-
-  // Set active speaker with auto-clearing timer
-  const triggerActiveSpeaker = useCallback((speakerInfo) => {
-    setActiveSpeaker(speakerInfo);
-    if (activeSpeakerTimeoutRef.current) {
-      clearTimeout(activeSpeakerTimeoutRef.current);
-    }
-    // Highlight remains for 3.5 seconds
-    activeSpeakerTimeoutRef.current = setTimeout(() => {
-      setActiveSpeaker(null);
-    }, 3500);
-  }, []);
+  }, [createPeerConnection, initiateCall, triggerActiveSpeaker]);
 
   // Web Audio API: Stream live microphone slices (3.0s WAV) to WebSocket for Biometric ASR
   useEffect(() => {
@@ -201,7 +332,7 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
           const rms = Math.sqrt(sumSquares / merged.length);
 
           // If local speech detected, highlight self card immediately
-          if (rms > 0.002 && selfInfo) {
+          if (rms > 0.003 && selfInfo) {
             triggerActiveSpeaker({
               peer_id: peerIdRef.current,
               user_name: userName,
@@ -211,7 +342,7 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
             });
           }
 
-          // Encode to standard 16kHz PCM WAV
+          // Encode to standard 16kHz PCM WAV and stream to server
           const wavBytes = encodeFloat32ToWav(merged, 16000);
           if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
             socketRef.current.send(wavBytes);
@@ -309,64 +440,11 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
     }));
   }, []);
 
-  // Demo Feature: Fill room up to 20 attendees for testing multi-user active speaker highlights
-  const addSimulatedParticipants = useCallback((count = 19) => {
-    const PALETTE = [
-      { name: "Cyan", border: "#06b6d4", bg: "rgba(6, 182, 212, 0.15)", glow: "rgba(6, 182, 212, 0.4)" },
-      { name: "Indigo", border: "#6366f1", bg: "rgba(99, 102, 241, 0.15)", glow: "rgba(99, 102, 241, 0.4)" },
-      { name: "Purple", border: "#a855f7", bg: "rgba(168, 85, 247, 0.15)", glow: "rgba(168, 85, 247, 0.4)" },
-      { name: "Amber", border: "#f59e0b", bg: "rgba(245, 158, 11, 0.15)", glow: "rgba(245, 158, 11, 0.4)" },
-      { name: "Rose", border: "#f43f5e", bg: "rgba(244, 63, 94, 0.15)", glow: "rgba(244, 63, 94, 0.4)" },
-      { name: "Teal", border: "#14b8a6", bg: "rgba(20, 184, 166, 0.15)", glow: "rgba(20, 184, 166, 0.4)" },
-      { name: "Sky", border: "#0ea5e9", bg: "rgba(14, 165, 233, 0.15)", glow: "rgba(14, 165, 233, 0.4)" },
-      { name: "Fuchsia", border: "#d946ef", bg: "rgba(217, 70, 239, 0.15)", glow: "rgba(217, 70, 239, 0.4)" },
-      { name: "Lime", border: "#84cc16", bg: "rgba(132, 204, 22, 0.15)", glow: "rgba(132, 204, 22, 0.4)" },
-      { name: "Orange", border: "#f97316", bg: "rgba(249, 115, 22, 0.15)", glow: "rgba(249, 115, 22, 0.4)" },
-      { name: "Blue", border: "#3b82f6", bg: "rgba(59, 130, 246, 0.15)", glow: "rgba(59, 130, 246, 0.4)" },
-      { name: "Pink", border: "#ec4899", bg: "rgba(236, 72, 153, 0.15)", glow: "rgba(236, 72, 153, 0.4)" },
-      { name: "Violet", border: "#8b5cf6", bg: "rgba(139, 92, 246, 0.15)", glow: "rgba(139, 92, 246, 0.4)" },
-      { name: "Yellow", border: "#eab308", bg: "rgba(234, 179, 8, 0.15)", glow: "rgba(234, 179, 8, 0.4)" },
-      { name: "Emerald", border: "#10b981", bg: "rgba(16, 185, 129, 0.15)", glow: "rgba(16, 185, 129, 0.4)" }
-    ];
-
-    const currentCount = participants.length;
-    const toAdd = DEMO_PARTICIPANTS.slice(0, count).map((item, idx) => ({
-      peer_id: `sim_peer_${idx}_${Date.now()}`,
-      user_name: item.name,
-      role: item.role,
-      color: PALETTE[(currentCount + idx) % PALETTE.length],
-      is_muted: idx % 3 === 0,
-      is_camera_off: idx % 4 === 0,
-      is_hand_raised: idx === 1 || idx === 7,
-      is_screen_sharing: false,
-      joined_at: new Date().toISOString()
-    }));
-
-    setParticipants(prev => {
-      // Filter out duplicates
-      const existingIds = new Set(prev.map(p => p.peer_id));
-      const fresh = toAdd.filter(p => !existingIds.has(p.peer_id));
-      return [...prev, ...fresh];
-    });
-  }, [participants]);
-
-  // Demo: Simulate speech from a participant with unique active speaker highlight & transcript
-  const simulateParticipantSpeech = useCallback((speakerName, text) => {
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      const match = participants.find(p => p.user_name.toLowerCase() === speakerName.toLowerCase());
-      socketRef.current.send(JSON.stringify({
-        type: 'SIMULATE_SPEECH',
-        speaker: speakerName,
-        peer_id: match ? match.peer_id : `peer_sim_${speakerName}`,
-        text: text
-      }));
-    }
-  }, [participants]);
-
   return {
     isConnected,
     participants,
     selfInfo,
+    remoteStreams,
     activeSpeaker,
     transcriptHistory,
     chatMessages,
@@ -380,9 +458,7 @@ export function useVideoCall({ roomId, userName, initialLocalStream = null }) {
     toggleCamera,
     toggleHandRaise,
     toggleScreenShare,
-    sendChatMessage,
-    addSimulatedParticipants,
-    simulateParticipantSpeech
+    sendChatMessage
   };
 }
 
