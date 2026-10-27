@@ -15,6 +15,7 @@ import {
   Hand, 
   Send,
   Download,
+  Loader2,
   ShieldCheck,
   Clock,
   User,
@@ -46,8 +47,45 @@ export default function MeetingSideDrawer({
   const [chatInput, setChatInput] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
   const chatBottomRef = useRef(null);
   const transcriptBottomRef = useRef(null);
+
+  const handleDownloadDocx = async () => {
+    if (!debrief) return;
+    setIsDownloadingDocx(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/meeting/export-docx`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          debrief,
+          transcript_history: transcriptHistory
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Server returned an error generating DOCX brief.');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `VocalSync_Executive_Debrief_${roomId || 'meeting'}_${new Date().toISOString().slice(0, 10)}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error downloading DOCX report:', err);
+      alert('Error downloading report: ' + err.message);
+    } finally {
+      setIsDownloadingDocx(false);
+    }
+  };
 
   useEffect(() => {
     if (activeTab === 'chat' && chatBottomRef.current) {
@@ -454,25 +492,26 @@ export default function MeetingSideDrawer({
                   )}
 
                   {/* Download DOCX Button (Kuro Solid Emerald / Black Button) */}
-                  <form
-                    action={`${apiBaseUrl}/api/meeting/export-docx`}
-                    method="POST"
-                    target="_blank"
-                    className="pt-2"
-                  >
-                    <input
-                      type="hidden"
-                      name="request_json"
-                      value={JSON.stringify({ debrief, transcript_history: transcriptHistory })}
-                    />
+                  <div className="pt-2">
                     <button
-                      type="submit"
-                      className="w-full py-2.5 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center justify-center gap-2 shadow-sm transition-all text-xs border border-emerald-700"
+                      type="button"
+                      onClick={handleDownloadDocx}
+                      disabled={isDownloadingDocx}
+                      className="w-full py-2.5 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold flex items-center justify-center gap-2 shadow-sm transition-all text-xs border border-emerald-700"
                     >
-                      <Download className="w-4 h-4" />
-                      <span>Download Executive DOCX Brief</span>
+                      {isDownloadingDocx ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Preparing DOCX Document...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-4 h-4" />
+                          <span>Download Executive DOCX Brief</span>
+                        </>
+                      )}
                     </button>
-                  </form>
+                  </div>
                 </>
               )}
             </div>

@@ -21,6 +21,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 from fastapi import (
     FastAPI,
+    Request,
     WebSocket,
     WebSocketDisconnect,
     UploadFile,
@@ -225,14 +226,50 @@ def summarize_meeting(request: SummarizeRequest):
 
 
 @app.post("/api/meeting/export-docx")
-def export_docx(request: ExportDocxRequest):
+async def export_docx(request: Request):
     """
     Constructs an executive corporate .docx document and returns it as a streaming binary download.
+    Seamlessly handles both JSON application/json and form-urlencoded request_json.
     """
     try:
+        content_type = request.headers.get("content-type", "")
+        body_dict = None
+
+        if "application/json" in content_type:
+            body_dict = await request.json()
+        elif "form" in content_type:
+            form = await request.form()
+            raw_field = form.get("request_json") or form.get("data")
+            if raw_field:
+                import json
+                body_dict = json.loads(raw_field)
+            else:
+                body_dict = dict(form)
+        else:
+            # Fallback parse
+            try:
+                body_dict = await request.json()
+            except Exception:
+                import json
+                raw_bytes = await request.body()
+                body_dict = json.loads(raw_bytes.decode("utf-8", errors="ignore"))
+
+        if not body_dict:
+            raise HTTPException(status_code=400, detail="Missing meeting debrief data.")
+
+        debrief_data = body_dict.get("debrief")
+        if isinstance(debrief_data, dict):
+            debrief_obj = MeetingDebrief(**debrief_data)
+        elif isinstance(debrief_data, MeetingDebrief):
+            debrief_obj = debrief_data
+        else:
+            debrief_obj = MeetingDebrief(**body_dict)
+
+        transcript_hist = body_dict.get("transcript_history", [])
+
         doc_stream = generate_executive_docx(
-            debrief=request.debrief,
-            transcript_history=request.transcript_history
+            debrief=debrief_obj,
+            transcript_history=transcript_hist
         )
         filename = f"VocalSync_Executive_Debrief_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
         return StreamingResponse(
@@ -243,6 +280,8 @@ def export_docx(request: ExportDocxRequest):
                 "Access-Control-Expose-Headers": "Content-Disposition"
             }
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"DOCX export error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to export report: {str(e)}")
