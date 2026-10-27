@@ -109,6 +109,33 @@ def get_speakers():
     return {"count": len(speakers), "speakers": speakers}
 
 
+@app.delete("/api/speakers/{speaker_name}")
+def delete_speaker(speaker_name: str):
+    """Deletes an enrolled speaker profile by name or filename."""
+    clean_name = speaker_name.removesuffix(".npy").strip()
+    success = biometrics_engine.delete_speaker(clean_name)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Voice profile '{clean_name}' not found.")
+    return {
+        "status": "success",
+        "message": f"Successfully deleted voice profile for '{clean_name}'",
+        "count": len(biometrics_engine.enrolled_profiles),
+        "speakers": biometrics_engine.list_enrolled_speakers()
+    }
+
+
+@app.delete("/api/speakers")
+def clear_all_speakers():
+    """Clears all enrolled speaker profiles."""
+    removed = biometrics_engine.clear_all_speakers()
+    return {
+        "status": "success",
+        "message": f"Successfully cleared {removed} voice profile(s).",
+        "count": len(biometrics_engine.enrolled_profiles),
+        "speakers": []
+    }
+
+
 @app.get("/api/enrollment/prompts")
 def get_enrollment_prompts():
     """Returns the 3 structured speech prompts for biometric enrollment."""

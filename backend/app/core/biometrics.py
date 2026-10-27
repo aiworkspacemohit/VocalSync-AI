@@ -315,6 +315,54 @@ class BiometricsEngine:
             for name in sorted(self.enrolled_profiles.keys())
         ]
 
+    def delete_speaker(self, speaker_name: str) -> bool:
+        """Deletes a voice profile from disk and reloads in-memory profiles."""
+        sanitized = speaker_name.lower().strip().replace(" ", "_")
+        target_path = os.path.join(settings.VOICE_PROFILES_DIR, f"{sanitized}.npy")
+
+        deleted = False
+        if os.path.exists(target_path):
+            try:
+                os.remove(target_path)
+                deleted = True
+                logger.info(f"[-] Deleted voice profile: {target_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete {target_path}: {e}")
+                raise e
+
+        # Also search case-insensitive if exact match not found
+        if not deleted:
+            search_path = os.path.join(settings.VOICE_PROFILES_DIR, "*.npy")
+            for fp in glob.glob(search_path):
+                base = os.path.splitext(os.path.basename(fp))[0].lower().replace(" ", "_")
+                if base == sanitized or base == speaker_name.lower().strip():
+                    try:
+                        os.remove(fp)
+                        deleted = True
+                        logger.info(f"[-] Deleted voice profile: {fp}")
+                        break
+                    except Exception as e:
+                        logger.error(f"Failed to delete {fp}: {e}")
+                        raise e
+
+        self.reload_profiles()
+        return deleted
+
+    def clear_all_speakers(self) -> int:
+        """Deletes all enrolled speaker profiles from disk and reloads in-memory cache."""
+        search_path = os.path.join(settings.VOICE_PROFILES_DIR, "*.npy")
+        deleted_count = 0
+        for fp in glob.glob(search_path):
+            try:
+                os.remove(fp)
+                deleted_count += 1
+            except Exception as e:
+                logger.error(f"Failed to remove {fp}: {e}")
+
+        self.reload_profiles()
+        logger.info(f"[-] Cleared {deleted_count} voice profiles from storage.")
+        return deleted_count
+
 
 # Singleton instance
 biometrics_engine = BiometricsEngine()

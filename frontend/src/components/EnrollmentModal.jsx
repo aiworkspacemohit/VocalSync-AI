@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Mic, CheckCircle2, AlertCircle, Loader2, ArrowRight, RotateCcw } from 'lucide-react';
+import { X, Mic, CheckCircle2, AlertCircle, Loader2, ArrowRight, RotateCcw, Trash2, Users } from 'lucide-react';
 
 const PROMPTS = [
   {
@@ -38,6 +38,8 @@ export default function EnrollmentModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState(null);
   const [micEnergy, setMicEnergy] = useState(0);
+  const [existingSpeakers, setExistingSpeakers] = useState([]);
+  const [deletingName, setDeletingName] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
@@ -47,6 +49,39 @@ export default function EnrollmentModal({
   const timerRef = useRef(null);
   const audioChunksRef = useRef([]);
 
+  const fetchExistingSpeakers = async () => {
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/speakers`);
+      if (res.ok) {
+        const data = await res.json();
+        setExistingSpeakers(data.speakers || []);
+      }
+    } catch (e) {
+      console.debug('Failed to load existing speakers:', e);
+    }
+  };
+
+  const handleDeleteSpeaker = async (name) => {
+    if (!window.confirm(`Are you sure you want to remove the biometric profile for "${name}"?`)) return;
+    setDeletingName(name);
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/speakers/${encodeURIComponent(name)}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        await fetchExistingSpeakers();
+        if (onEnrollmentSuccess) onEnrollmentSuccess();
+      } else {
+        alert('Failed to delete profile.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert(`Network error deleting profile: ${err.message}`);
+    } finally {
+      setDeletingName(null);
+    }
+  };
+
   useEffect(() => {
     if (!isOpen) {
       cleanupStreams();
@@ -55,6 +90,8 @@ export default function EnrollmentModal({
       setSamples([null, null, null]);
       setStatusMessage(null);
       setIsRecording(false);
+    } else {
+      fetchExistingSpeakers();
     }
   }, [isOpen]);
 
@@ -265,6 +302,43 @@ export default function EnrollmentModal({
               className="w-full px-3.5 py-2.5 rounded-lg bg-white border border-zinc-700 focus:border-black focus:ring-1 focus:ring-black text-sm text-zinc-900 placeholder-zinc-400 outline-none transition-all shadow-sm"
             />
           </div>
+
+          {/* Manage Existing Enrolled Voiceprints */}
+          {existingSpeakers.length > 0 && (
+            <div className="p-3 rounded-xl bg-zinc-100 border border-zinc-700/80 space-y-2">
+              <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-zinc-500 font-mono">
+                <span className="flex items-center gap-1.5 text-zinc-700">
+                  <Users className="w-3.5 h-3.5" />
+                  Enrolled Profiles ({existingSpeakers.length})
+                </span>
+                <span className="text-zinc-400">Click × to remove</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto pr-1">
+                {existingSpeakers.map((spk, idx) => (
+                  <span
+                    key={idx}
+                    className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 rounded-md bg-white text-zinc-900 border border-zinc-700 text-xs font-semibold shadow-xs group hover:border-zinc-900 transition-all"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                    <span className="truncate max-w-[120px]">{spk.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteSpeaker(spk.name)}
+                      disabled={deletingName === spk.name}
+                      className="p-0.5 rounded hover:bg-rose-100 hover:text-rose-600 text-zinc-400 transition-colors ml-0.5 disabled:opacity-50"
+                      title={`Remove biometric profile for "${spk.name}"`}
+                    >
+                      {deletingName === spk.name ? (
+                        <Loader2 className="w-2.5 h-2.5 animate-spin text-zinc-600" />
+                      ) : (
+                        <X className="w-2.5 h-2.5" />
+                      )}
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* 3 Steps Progress Bar (Kuro style solid black when active) */}
           <div className="grid grid-cols-3 gap-2">

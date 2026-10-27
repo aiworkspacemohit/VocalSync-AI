@@ -8,7 +8,10 @@ import {
   Activity, 
   Server,
   RefreshCw,
-  Video
+  Video,
+  Trash2,
+  X,
+  Loader2
 } from 'lucide-react';
 
 import { useMeetingSocket } from '../hooks/useMeetingSocket';
@@ -77,9 +80,57 @@ export default function BiometricStudio({ onNavigateToMeet }) {
     }
   }, []);
 
+  const [deletingName, setDeletingName] = useState(null);
+
   useEffect(() => {
     fetchSystemInfo();
   }, [fetchSystemInfo]);
+
+  // Remove single voice profile
+  const handleDeleteProfile = async (name) => {
+    if (!window.confirm(`Are you sure you want to remove the biometric voice profile for "${name}"?`)) {
+      return;
+    }
+
+    setDeletingName(name);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/speakers/${encodeURIComponent(name)}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        fetchSystemInfo();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed to delete profile: ${err.detail || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Delete speaker error:', err);
+      alert(`Network error deleting profile: ${err.message}`);
+    } finally {
+      setDeletingName(null);
+    }
+  };
+
+  // Remove all voice profiles
+  const handleClearAllProfiles = async () => {
+    if (!window.confirm('Are you sure you want to remove ALL enrolled biometric voice profiles? This cannot be undone.')) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/speakers`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        fetchSystemInfo();
+      } else {
+        alert('Failed to clear voice profiles.');
+      }
+    } catch (err) {
+      console.error('Clear all speakers error:', err);
+      alert(`Network error: ${err.message}`);
+    }
+  };
 
   // Controls Handlers
   const handleStartSession = async () => {
@@ -219,24 +270,49 @@ export default function BiometricStudio({ onNavigateToMeet }) {
                 <Users className="w-3.5 h-3.5 text-zinc-700" />
                 Active Biometric Profiles ({enrolledSpeakers.length})
               </span>
-              <span className="text-[10px] text-zinc-500 font-mono font-semibold">
-                192-D Centroids
-              </span>
+              <div className="flex items-center gap-2">
+                {enrolledSpeakers.length > 0 && (
+                  <button
+                    onClick={handleClearAllProfiles}
+                    className="text-[10px] text-rose-600 hover:text-rose-700 font-bold flex items-center gap-1 hover:underline transition-colors"
+                    title="Remove all enrolled voice profiles"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Clear All</span>
+                  </button>
+                )}
+                <span className="text-[10px] text-zinc-400 font-mono">
+                  192-D Centroids
+                </span>
+              </div>
             </div>
-            <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
+            <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-1">
               {enrolledSpeakers.length > 0 ? (
                 enrolledSpeakers.map((name, i) => (
                   <span
                     key={i}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-zinc-50 text-zinc-900 border border-zinc-700 shadow-xs"
+                    className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-md text-xs font-semibold bg-zinc-50 text-zinc-900 border border-zinc-700 shadow-xs group hover:border-zinc-900 transition-all"
                   >
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                    {name}
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                    <span className="truncate max-w-[120px]">{name}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteProfile(name)}
+                      disabled={deletingName === name}
+                      className="p-0.5 rounded hover:bg-rose-100 hover:text-rose-600 text-zinc-400 transition-colors ml-0.5 disabled:opacity-50"
+                      title={`Remove biometric profile for "${name}"`}
+                    >
+                      {deletingName === name ? (
+                        <Loader2 className="w-3 h-3 animate-spin text-zinc-600" />
+                      ) : (
+                        <X className="w-3 h-3" />
+                      )}
+                    </button>
                   </span>
                 ))
               ) : (
                 <span className="text-xs text-zinc-400 italic">
-                  No enrolled profiles found in storage.
+                  No enrolled profiles found in storage. Click "+ Enroll" to register your voice.
                 </span>
               )}
             </div>
