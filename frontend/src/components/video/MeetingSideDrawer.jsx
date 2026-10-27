@@ -21,6 +21,7 @@ import {
   UserPlus,
   Play
 } from 'lucide-react';
+import { getApiBaseUrl } from '../../config/api';
 
 export default function MeetingSideDrawer({
   isOpen = false,
@@ -34,7 +35,7 @@ export default function MeetingSideDrawer({
   activeSpeaker = null,
   debrief = null,
   isGeneratingDebrief = false,
-  apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
+  apiBaseUrl = getApiBaseUrl(),
   onClose,
   onChangeTab,
   onSendMessage,

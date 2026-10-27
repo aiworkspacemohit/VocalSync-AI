@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Users
 } from 'lucide-react';
+import { getApiBaseUrl } from '../../config/api';
 
 export default function LobbyScreen({
   userName,
@@ -19,7 +20,7 @@ export default function LobbyScreen({
   onJoinMeeting,
   onCreateMeeting,
   onBackToStudio,
-  apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  apiBaseUrl = getApiBaseUrl()
 }) {
   const [meetingCodeInput, setMeetingCodeInput] = useState('');
   const [isCameraActive, setIsCameraActive] = useState(true);

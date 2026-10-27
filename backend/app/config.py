@@ -19,6 +19,7 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
+        "https://vocal-sync-ai.vercel.app",
         "*"
     ]
     VOICE_PROFILES_DIR: str = str(BASE_DIR / "voice_profiles")

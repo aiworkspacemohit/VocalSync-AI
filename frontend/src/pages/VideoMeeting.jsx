@@ -5,8 +5,9 @@ import VideoGrid from '../components/video/VideoGrid';
 import MeetingBottomBar from '../components/video/MeetingBottomBar';
 import MeetingSideDrawer from '../components/video/MeetingSideDrawer';
 import { AudioWaveform, ArrowLeft, Sparkles, ShieldCheck } from 'lucide-react';
+import { getApiBaseUrl } from '../config/api';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const API_BASE_URL = getApiBaseUrl();
 
 export default function VideoMeeting({ onNavigateToStudio }) {
   const [roomId, setRoomId] = useState(null);

@@ -22,11 +22,13 @@ const PROMPTS = [
   }
 ];
 
+import { getApiBaseUrl } from '../config/api';
+
 export default function EnrollmentModal({
   isOpen,
   onClose,
   onEnrollmentSuccess,
-  apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  apiBaseUrl = getApiBaseUrl()
 }) {
   const [speakerName, setSpeakerName] = useState('');
   const [currentStep, setCurrentStep] = useState(1); // 1, 2, 3

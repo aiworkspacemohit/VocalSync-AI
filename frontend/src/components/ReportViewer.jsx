@@ -12,11 +12,13 @@ import {
   ChevronRight 
 } from 'lucide-react';
 
+import { getApiBaseUrl } from '../config/api';
+
 export default function ReportViewer({
   debrief,
   transcriptHistory = [],
   isLoading = false,
-  apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  apiBaseUrl = getApiBaseUrl()
 }) {
   const [activeTab, setActiveTab] = useState('executive'); // 'executive' | 'intents' | 'actions' | 'markdown'
   const [isDownloading, setIsDownloading] = useState(false);

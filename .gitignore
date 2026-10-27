@@ -43,3 +43,6 @@ Thumbs.db
 
 # Private biometric voice profiles
 backend/voice_profiles/
+
+# Tunnel binaries
+cloudflared.exe
