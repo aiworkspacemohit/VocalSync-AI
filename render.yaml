@@ -1,0 +1,24 @@
+services:
+  # 1. FastAPI + SpeechBrain + Faster-Whisper Backend
+  - type: web
+    name: vocalsync-backend
+    runtime: docker
+    dockerfilePath: backend/Dockerfile.backend
+    dockerContext: backend
+    plan: standard
+    region: oregon
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: HOST
+        value: 0.0.0.0
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ASR_MODEL_SIZE
+        value: small.en
+      - key: VOICE_PROFILES_DIR
+        value: /var/data/voice_profiles
+    disk:
+      name: vocalsync-voice-profiles
+      mountPath: /var/data/voice_profiles
+      sizeGB: 1

@@ -1,6 +1,15 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
-const DEFAULT_WS_URL = import.meta.env.VITE_WS_URL || `ws://${window.location.hostname}:8000/ws/meeting`;
+const getDefaultWsUrl = () => {
+  if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL.replace(/^http/, 'ws') + '/ws/meeting';
+  }
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.hostname}:8000/ws/meeting`;
+};
+
+const DEFAULT_WS_URL = getDefaultWsUrl();
 
 export function useMeetingSocket(url = DEFAULT_WS_URL) {
   const [status, setStatus] = useState('DISCONNECTED'); // 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'ERROR'

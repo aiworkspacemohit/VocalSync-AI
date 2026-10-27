@@ -17,13 +17,6 @@ services:
     volumes:
       - ./backend/voice_profiles:/app/voice_profiles
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
 
   frontend:
     build:
