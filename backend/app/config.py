@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         "*"
     ]
     VOICE_PROFILES_DIR: str = str(BASE_DIR / "voice_profiles")
-    ASR_MODEL_SIZE: str = "small.en"
+    ASR_MODEL_SIZE: str = "distil-large-v3"
     SIMILARITY_THRESHOLD: float = 0.39
     CONFIDENCE_MARGIN: float = 0.02
     CONTINUITY_THRESHOLD: float = 0.30
